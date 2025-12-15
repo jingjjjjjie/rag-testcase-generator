@@ -46,22 +46,36 @@ def get_qwen_embeddings(texts, dim=1024):
     return embeddings, total_tokens
 
 
-def get_qwen_logprobs(prompt, answer):
+def get_qwen_logprobs(prompt, top_logprobs=5, model='qwen-plus'):
     client = OpenAI(
         api_key=os.getenv("QWEN_API_KEY"),
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
     )
-    
+
     response = client.chat.completions.create(
-        model="qwen-turbo",
+        model=model,
         messages=[{"role": "user", "content": prompt}],
-        logprobs=True,  # Try this - may return null
-        top_logprobs=5
+        logprobs=True,
+        top_logprobs=top_logprobs
     )
-    return response
+
+    # Calculate cost based on token usage
+    prompt_tokens = response.usage.prompt_tokens
+    completion_tokens = response.usage.completion_tokens
+
+    # Qwen pricing (approximate - adjust based on actual pricing)
+    # qwen-plus: ¥0.004/1K tokens input, ¥0.012/1K tokens output
+    # Converting to USD (approximate): $0.0006/1K input, $0.0017/1K output
+    input_cost_per_token = 0.0006 / 1000
+    output_cost_per_token = 0.0017 / 1000
+
+    cost = (prompt_tokens * input_cost_per_token) + (completion_tokens * output_cost_per_token)
+
+    return response, cost 
 
 if __name__ == "__main__":
-    response, prompt_tokens, completion_tokens = call_api_qwen("Hello, how are you?")
-    print("Response:", response)
-    print("Prompt Tokens:", prompt_tokens)
-    print("Completion Tokens:", completion_tokens)
+    #print(get_qwen_logprobs("yo whatsup"))
+    import math
+
+    logprob = -3.9465885162353516
+    probability = math.exp(logprob)  # NOT math.log()

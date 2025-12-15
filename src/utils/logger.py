@@ -52,6 +52,8 @@ _logger.setLevel(logging.INFO)
 # set the console output handler
 con_handler = logging.StreamHandler(sys.stdout)
 con_handler.setFormatter(_MyFormatter(datefmt='%m%d %H:%M:%S'))
+# Force immediate flush to prevent buffering lag
+con_handler.stream.reconfigure(line_buffering=True) if hasattr(con_handler.stream, 'reconfigure') else None
 _logger.addHandler(con_handler)
 
 
@@ -109,7 +111,16 @@ def _get_path():
 _LOGGING_METHOD = ['info', 'warning', 'error', 'critical',
                    'warn', 'exception', 'debug']
 
-# export logger functions
+# Wrapper to ensure immediate flush
+def _make_flush_wrapper(log_func):
+    def wrapper(*args, **kwargs):
+        result = log_func(*args, **kwargs)
+        sys.stdout.flush()
+        return result
+    return wrapper
+
+# export logger functions with flush wrapper
 for func in _LOGGING_METHOD:
-    locals()[func] = getattr(_logger, func)
+    original_func = getattr(_logger, func)
+    locals()[func] = _make_flush_wrapper(original_func)
     __all__.append(func)

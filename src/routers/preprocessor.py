@@ -1,22 +1,20 @@
 import re
 import os
-import json
-from pathlib import Path
 from dotenv import load_dotenv
+import re
 
 from src.utils.api_utils import call_api_qwen
-from src.utils.file_utils import save_json, load_json, read_text_file
-from src.utils.string_utils import extract_text_from_pdf
+from src.utils.file_utils import save_json, read_text_file, extract_text_from_pdf
 from src.utils.logger import info, error
 from src import PROJECT_ROOT
 
-from src.routers import split_by_questions
-
 class Preprocessor:
     def __init__(self):
+        
         info("=" * 100)
         info("Running Preprocessor".center(100))
         info("=" * 100)
+        
         self.PREPROCESSOR_PDF_PATH = None
         self.PREPROCESSOR_PROMPT_PATH = None
         self.PREPROCESSOR_CLEANED_OUTPUT_PATH = None
@@ -36,6 +34,8 @@ class Preprocessor:
         self.PREPROCESSOR_PROMPT_PATH = os.path.join(PROJECT_ROOT, self.PREPROCESSOR_PROMPT_PATH)
         self.PREPROCESSOR_CLEANED_OUTPUT_PATH = os.path.join(PROJECT_ROOT, self.PREPROCESSOR_CLEANED_OUTPUT_PATH)
         self.PREPROCESSOR_CHUNKED_OUTPUT_PATH = os.path.join(PROJECT_ROOT, self.PREPROCESSOR_CHUNKED_OUTPUT_PATH)
+
+        self.TEMPERATURE = float(os.getenv("TEMPERATURE", 0.6))
     
     def process_chunk_text(self, chunk, counter):
         """
@@ -106,18 +106,32 @@ class Preprocessor:
 
         return chunk_contents
 
-    def run(self):
+    def run(self, pdf=None):
+        # Determine if we're in direct mode (pdf file/object provided)
+        # pdf can be: file path (str), or file object (from Streamlit upload)
+        direct_mode = pdf is not None
+
         total_prompt_tokens = 0
         total_completion_tokens = 0
         success_num = 0
         all_num = 3
 
         try:
-            info(f"Step 1/3: Cleaning PDF at {self.PREPROCESSOR_PDF_PATH}")
+            # Use provided pdf or default path from env
+            if pdf is None:
+                pdf_source = self.PREPROCESSOR_PDF_PATH
+                info(f"Step 1/3: Cleaning PDF at {pdf_source}")
+            else:
+                pdf_source = pdf  # Can be a file path or file object
+                info(f"Step 1/3: Cleaning provided PDF")
+
             data_cleaning_prompt = read_text_file(self.PREPROCESSOR_PROMPT_PATH)
-            pdf_text = extract_text_from_pdf(self.PREPROCESSOR_PDF_PATH)
-            cleaned_pdf_text, prompt_tokens, completion_tokens = call_api_qwen(data_cleaning_prompt + pdf_text)
-            save_json(cleaned_pdf_text, self.PREPROCESSOR_CLEANED_PDF_PATH)
+            pdf_text = extract_text_from_pdf(pdf_source)  # Now handles both paths and file objects
+            cleaned_pdf_text, prompt_tokens, completion_tokens = call_api_qwen(data_cleaning_prompt + pdf_text, temperature=self.TEMPERATURE)
+
+            if not direct_mode:
+                save_json(cleaned_pdf_text, self.PREPROCESSOR_CLEANED_PDF_PATH)
+
             total_prompt_tokens += prompt_tokens
             total_completion_tokens += completion_tokens
             success_num += 1
@@ -129,7 +143,10 @@ class Preprocessor:
         try:
             info(f"Step 2/3: Splitting questions from cleaned PDF")
             question_set = split_by_questions(cleaned_pdf_text)
-            save_json(question_set, self.PREPROCESSOR_CLEANED_OUTPUT_PATH)
+
+            if not direct_mode:
+                save_json(question_set, self.PREPROCESSOR_CLEANED_OUTPUT_PATH)
+
             success_num += 1
             info(f"Questions split successfully. Found {len(question_set)} questions.")
 
@@ -139,21 +156,42 @@ class Preprocessor:
 
         try:
             info(f"Step 3/3: Adding sentence labeling and chunking corpus")
-            cleaned_questions = load_json(self.PREPROCESSOR_CLEANED_OUTPUT_PATH)
-            chunk_contents = self.process_questions(cleaned_questions)
-            save_json(chunk_contents, self.PREPROCESSOR_CHUNKED_OUTPUT_PATH)
+            chunk_contents = self.process_questions(question_set)
+
+            if not direct_mode:
+                save_json(chunk_contents, self.PREPROCESSOR_CHUNKED_OUTPUT_PATH)
+
             success_num += 1
             info(f"Questions chunked successfully. Created {len(chunk_contents)} chunks")
         except Exception as e:
             error(f"Error chunking questions or building corpus: {e}")
             return total_prompt_tokens, total_completion_tokens, success_num, all_num
-        
+
         info(f"Total prompt tokens: {total_prompt_tokens}")
         info(f"Total completion tokens: {total_completion_tokens}")
         info(f"Task Success rate: {success_num}/{all_num} = {success_num/all_num*100:.2f}%")
 
-        return total_prompt_tokens, total_completion_tokens, success_num, all_num
+        if direct_mode:
+            # In direct mode, return the processed chunks instead of just stats
+            return chunk_contents, total_prompt_tokens, total_completion_tokens, success_num, all_num
+        else:
+            return total_prompt_tokens, total_completion_tokens, success_num, all_num
 
+def split_by_questions(text):
+    """
+    Split into blocks using Q markers like "1)", "2)", ..., "10)"
+    """
+    pattern = r"(?m)^(?:\d{1,2}\))"
+    matches = list(re.finditer(pattern, text))
+
+    chunks = []
+    for i in range(len(matches)):
+        start = matches[i].start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        chunk = text[start:end].strip()
+        chunks.append(chunk)
+
+    return chunks
 
 if __name__ == "__main__":
     load_dotenv('single_hop.env')
