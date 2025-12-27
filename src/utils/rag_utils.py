@@ -44,6 +44,18 @@ def reformat_objective_facts(data):
 
     return result_str
 
+def list_to_numbered_string(string_list):
+    """
+    Convert a list of strings into a numbered string.
+
+    :param string_list: list of str, the list of strings to be converted
+    :return: str, the resulting numbered string
+    """
+    numbered_string = ""
+    for index, string in enumerate(string_list, start=1):
+        numbered_string += f"{index}. {string}\n"
+    return numbered_string.strip()
+
 def convert_set_to_list(obj):
     """
     Recursively convert sets to lists in a nested structure.

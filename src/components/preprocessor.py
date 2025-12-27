@@ -10,11 +10,6 @@ from src import PROJECT_ROOT
 
 class Preprocessor:
     def __init__(self):
-        
-        info("=" * 100)
-        info("Running Preprocessor".center(100))
-        info("=" * 100)
-        
         self.PREPROCESSOR_PDF_PATH = None
         self.PREPROCESSOR_PROMPT_PATH = None
         self.PREPROCESSOR_CLEANED_OUTPUT_PATH = None
@@ -22,18 +17,13 @@ class Preprocessor:
         self.PREPROCESSOR_CLEANED_PDF_PATH = None
 
         if os.getenv("PREPROCESSOR_PDF_PATH", None) != None:
-            self.PREPROCESSOR_PDF_PATH = os.getenv("PREPROCESSOR_PDF_PATH")
-            self.PREPROCESSOR_PROMPT_PATH = os.getenv("PREPROCESSOR_PROMPT_PATH")
-            self.PREPROCESSOR_CLEANED_OUTPUT_PATH = os.getenv("PREPROCESSOR_CLEANED_OUTPUT_PATH")
-            self.PREPROCESSOR_CHUNKED_OUTPUT_PATH = os.getenv("PREPROCESSOR_CHUNKED_OUTPUT_PATH")
-            self.PREPROCESSOR_CLEANED_PDF_PATH = os.getenv("PREPROCESSOR_CLEANED_PDF_PATH")
+            self.PREPROCESSOR_PDF_PATH = os.path.join(PROJECT_ROOT, os.getenv("PREPROCESSOR_PDF_PATH"))
+            self.PREPROCESSOR_PROMPT_PATH = os.path.join(PROJECT_ROOT, os.getenv("PREPROCESSOR_PROMPT_PATH"))
+            self.PREPROCESSOR_CLEANED_OUTPUT_PATH = os.path.join(PROJECT_ROOT, os.getenv("PREPROCESSOR_CLEANED_OUTPUT_PATH"))
+            self.PREPROCESSOR_CHUNKED_OUTPUT_PATH = os.path.join(PROJECT_ROOT, os.getenv("PREPROCESSOR_CHUNKED_OUTPUT_PATH"))
+            self.PREPROCESSOR_CLEANED_PDF_PATH = os.path.join(PROJECT_ROOT, os.getenv("PREPROCESSOR_CLEANED_PDF_PATH"))
         else:
             raise EnvironmentError("Environment variables are not defined correctly")
-
-        self.PREPROCESSOR_PDF_PATH = os.path.join(PROJECT_ROOT, self.PREPROCESSOR_PDF_PATH)
-        self.PREPROCESSOR_PROMPT_PATH = os.path.join(PROJECT_ROOT, self.PREPROCESSOR_PROMPT_PATH)
-        self.PREPROCESSOR_CLEANED_OUTPUT_PATH = os.path.join(PROJECT_ROOT, self.PREPROCESSOR_CLEANED_OUTPUT_PATH)
-        self.PREPROCESSOR_CHUNKED_OUTPUT_PATH = os.path.join(PROJECT_ROOT, self.PREPROCESSOR_CHUNKED_OUTPUT_PATH)
 
         self.TEMPERATURE = float(os.getenv("TEMPERATURE", 0.6))
     
@@ -107,6 +97,9 @@ class Preprocessor:
         return chunk_contents
 
     def run(self, pdf=None):
+        info("=" * 100)
+        info("Running Preprocessor".center(100))
+        info("=" * 100)
         # Determine if we're in direct mode (pdf file/object provided)
         # pdf can be: file path (str), or file object (from Streamlit upload)
         direct_mode = pdf is not None

@@ -1,52 +1,47 @@
 import os
 import random
-import json
 import re
 from tqdm import tqdm
 import threading
-
 from src import PROJECT_ROOT
-from src.routers.entity_graph_constructor import EntityRelationshipGraph
+from src.components.entity_graph_constructor import EntityRelationshipGraph
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from src.utils.api_utils import call_api_qwen
 from src.utils.rag_utils import reformat_objective_facts, convert_set_to_list
 from src.utils.file_utils import read_text_file, save_json, load_json
 from src.utils.logger import info, error
 
-
 class ProposeGenerator:
     def __init__(self):
+        self.PROPOSE_GENERATOR_PROMPT_PATH = None
+        self.PROPOSE_GENERATOR_GENERATED_TYPE = None
+        self.PROPOSE_GENERATOR_INPUT_PATH = None
+        self.PROPOSE_GENERATOR_OUTPUT_PATH = None
+        self.PROPOSE_GENERATOR_GRAPH_PATH = None
+        self.NUM_WORKERS = None
+        self.SAVE_INTERVAL = None
+        self.TEMPERATURE = None
 
-        info("=" * 100)
-        info("Running Propose Generator".center(100))
-        info("=" * 100)
-
-        self.PROPOSE_GENERATOR_INPUT_PATH, self.PROPOSE_GENERATOR_PROMPT_PATH, self.PROPOSE_GENERATOR_OUTPUT_PATH, self.PROPOSE_GENERATOR_GRAPH_PATH = None, None, None, None
-
-        if os.getenv("PROPOSE_GENERATOR_CONTENT_INPUT_PATH", None) != None:
-            self.PROPOSE_GENERATOR_INPUT_PATH = os.getenv("PROPOSE_GENERATOR_CONTENT_INPUT_PATH")
-            self.PROPOSE_GENERATOR_PROMPT_PATH = os.getenv("PROPOSE_GENERATOR_CONTENT_PROMPT_PATH")
-            self.PROPOSE_GENERATOR_OUTPUT_PATH = os.getenv("PROPOSE_GENERATOR_CONTENT_OUTPUT_PATH")
+        if os.getenv("PROPOSE_GENERATOR_CONTENT_INPUT_PATH", None) is not None:
+            self.PROPOSE_GENERATOR_INPUT_PATH = os.path.join(PROJECT_ROOT, os.getenv("PROPOSE_GENERATOR_CONTENT_INPUT_PATH"))
+            self.PROPOSE_GENERATOR_PROMPT_PATH = os.path.join(PROJECT_ROOT, os.getenv("PROPOSE_GENERATOR_CONTENT_PROMPT_PATH"))
+            self.PROPOSE_GENERATOR_OUTPUT_PATH = os.path.join(PROJECT_ROOT, os.getenv("PROPOSE_GENERATOR_CONTENT_OUTPUT_PATH"))
+            self.PROPOSE_GENERATOR_SYSTEM_PROMPT = read_text_file(os.path.join(PROJECT_ROOT, os.getenv("SYSTEM_PROMPT_PATH", None)))
             self.PROPOSE_GENERATOR_GENERATED_TYPE = "content"
-        elif os.getenv("PROPOSE_GENERATOR_ENTITYGRAPH_INPUT_PATH", None) != None:
-            self.PROPOSE_GENERATOR_INPUT_PATH = os.getenv("PROPOSE_GENERATOR_ENTITYGRAPH_INPUT_PATH")
-            self.PROPOSE_GENERATOR_PROMPT_PATH = os.getenv("PROPOSE_GENERATOR_ENTITYGRAPH_PROMPT_PATH")
-            self.PROPOSE_GENERATOR_OUTPUT_PATH = os.getenv("PROPOSE_GENERATOR_ENTITYGRAPH_OUTPUT_PATH")
-            self.PROPOSE_GENERATOR_GRAPH_PATH = os.getenv("PROPOSE_GENERATOR_ENTITYGRAPH_VISUALIZATION_PATH")
+        elif os.getenv("PROPOSE_GENERATOR_ENTITYGRAPH_INPUT_PATH", None) is not None:
+            self.PROPOSE_GENERATOR_INPUT_PATH = os.path.join(PROJECT_ROOT, os.getenv("PROPOSE_GENERATOR_ENTITYGRAPH_INPUT_PATH"))
+            self.PROPOSE_GENERATOR_PROMPT_PATH = os.path.join(PROJECT_ROOT, os.getenv("PROPOSE_GENERATOR_ENTITYGRAPH_PROMPT_PATH"))
+            self.PROPOSE_GENERATOR_OUTPUT_PATH = os.path.join(PROJECT_ROOT, os.getenv("PROPOSE_GENERATOR_ENTITYGRAPH_OUTPUT_PATH"))
+            self.PROPOSE_GENERATOR_GRAPH_PATH = os.path.join(PROJECT_ROOT, os.getenv("PROPOSE_GENERATOR_ENTITYGRAPH_VISUALIZATION_PATH"))
+            self.PROPOSE_GENERATOR_SYSTEM_PROMPT = read_text_file(os.path.join(PROJECT_ROOT, os.getenv("SYSTEM_PROMPT_PATH", None)))
             self.PROPOSE_GENERATOR_GENERATED_TYPE = "entity_graph"
         else:
             raise EnvironmentError("Environment variables not configured properly for Propose Generator.")
 
-        # Mandatory Parameters to be defined in .env file
-        self.PROPOSE_GENERATOR_INPUT_PATH = os.path.join(PROJECT_ROOT, self.PROPOSE_GENERATOR_INPUT_PATH)
-        self.PROPOSE_GENERATOR_PROMPT_PATH = os.path.join(PROJECT_ROOT, self.PROPOSE_GENERATOR_PROMPT_PATH)
-        self.PROPOSE_GENERATOR_OUTPUT_PATH = os.path.join(PROJECT_ROOT, self.PROPOSE_GENERATOR_OUTPUT_PATH)
-
         # Optional Parameters
         self.NUM_WORKERS = int(os.getenv("NUM_WORKERS", 4))
-        self.PROPOSE_GENERATOR_MAX_GEN_TIMES = int(os.getenv("PROPOSE_GENERATOR_MAX_GEN_TIMES", 300))
-        self.PROPOSE_GENERATOR_MAX_QUESTIONS_PER_CHUNK = int(os.getenv("PROPOSE_GENERATOR_MAX_QUESTIONS_PER_CHUNK", 3))
-        self.PROPOSE_GENERATOR_MAX_QUESTIONS_PER_ENTITY = int(os.getenv("PROPOSE_GENERATOR_MAX_QUESTIONS_PER_ENTITY", 3))
+        self.PROPOSE_GENERATOR_MAX_GEN_TIMES = int(os.getenv("MAX_QUESTION_GENERATED", 300))
+        self.MAX_QUESTION = int(os.getenv("MAX_QUESTION_PER_CHUNK", 3))
         self.SAVE_INTERVAL = int(os.getenv("SAVE_INTERVAL", 10))
         self.TEMPERATURE = float(os.getenv("TEMPERATURE", 0.6))
 
@@ -55,38 +50,8 @@ class ProposeGenerator:
         self.total_completion_tokens = 0
         self.token_lock = threading.Lock()
 
-        if self.PROPOSE_GENERATOR_GENERATED_TYPE in ['content']:
-            if os.path.exists(self.PROPOSE_GENERATOR_OUTPUT_PATH):
-                self.inputs = load_json(self.PROPOSE_GENERATOR_OUTPUT_PATH)
-                info(f"Loaded propose generator {len(self.inputs)} examples from {os.path.relpath(self.PROPOSE_GENERATOR_OUTPUT_PATH, PROJECT_ROOT)}.")
-            else:
-                self.inputs = load_json(self.PROPOSE_GENERATOR_INPUT_PATH)
-                info(f"Loaded propose generator {len(self.inputs)} examples from {os.path.relpath(self.PROPOSE_GENERATOR_INPUT_PATH, PROJECT_ROOT)}.")
-
-        elif self.PROPOSE_GENERATOR_GENERATED_TYPE in ['entity_graph']:
-            self.inputs = load_json(self.PROPOSE_GENERATOR_INPUT_PATH)
-            self.PROPOSE_GENERATOR_GRAPH_PATH = os.path.join(PROJECT_ROOT, self.PROPOSE_GENERATOR_GRAPH_PATH)
-            info(f"Entity relationship graph path: {os.path.relpath(self.PROPOSE_GENERATOR_GRAPH_PATH, PROJECT_ROOT)}")
-            self.entity_relationship_graph = EntityRelationshipGraph(self.inputs)
-            # Convert sets to lists before saving (sets are not JSON serializable)
-            entities_dict = {}
-            for entity_id, entity_info in self.entity_relationship_graph.entities.items():
-                entities_dict[entity_id] = {
-                    **entity_info,
-                    'chunk_names': list(entity_info['chunk_names']) if isinstance(entity_info['chunk_names'], set) else entity_info['chunk_names']
-                }
-            save_json(entities_dict, self.PROPOSE_GENERATOR_GRAPH_PATH)
-            info(f"Saved entity relationship graph to {os.path.relpath(self.PROPOSE_GENERATOR_GRAPH_PATH, PROJECT_ROOT)}.")
-            info(f"Loaded propose generator {len(self.inputs)} examples from {os.path.relpath(self.PROPOSE_GENERATOR_INPUT_PATH, PROJECT_ROOT)}.")
-        else:
-            raise ValueError(f"Invalid value for 'PROPOSE_GENERATOR_GENERATED_TYPE': {self.PROPOSE_GENERATOR_GENERATED_TYPE}")
-
-        # Load system prompt (optional)
-        system_prompt_path = os.getenv("SYSTEM_PROMPT_PATH", None)
-        if system_prompt_path:
-            self.SYSTEM_PROMPT = read_text_file(os.path.join(PROJECT_ROOT, system_prompt_path))
-        else:
-            self.SYSTEM_PROMPT = None
+        # question generation tracker
+        self.total_questions_generated = 0
 
     def _entity_relationship_graph_2_entity_relationship_prompt(self, entity_relationship_graph, strategy="random_relationship"):
         
@@ -120,7 +85,7 @@ class ProposeGenerator:
 
     def process_input_content(self, cur_input, cur_propose_generator_prompt, i):
         try:
-            propose_generator_response, prompt_tokens, completion_tokens = call_api_qwen(cur_propose_generator_prompt, temperature=self.TEMPERATURE, system_prompt=self.SYSTEM_PROMPT)
+            propose_generator_response, prompt_tokens, completion_tokens = call_api_qwen(cur_propose_generator_prompt, temperature=self.TEMPERATURE, system_prompt=self.PROPOSE_GENERATOR_SYSTEM_PROMPT)
 
             # Thread-safe token accumulation
             with self.token_lock:
@@ -128,69 +93,128 @@ class ProposeGenerator:
                 self.total_completion_tokens += completion_tokens
 
             proposed_questions = extract_execution_output_content(propose_generator_response)
+
+            # Count total questions generated
+            questions_count = len(proposed_questions)
+
             result = {
                 **cur_input, # python dictonary unpacking, 把所有的key展开
                 'proposed-questions': proposed_questions
             }
-            return result, i
+            return result, i, questions_count
         except Exception as e:
             error(f"An error occurred while processing input {cur_input.get('id', 'unknown id')}: {e}")
-            return None, None
+            return None, None, 0
 
-    def run(self):
+    def run(self, inputs=None):
 
-        # read the propose generator prompt
-        # mult purposed, differenciated in the __init__ function, load from "content" path or "entity graph" path
+        info("=" * 100)
+        info("Running Propose Generator".center(100))
+        info("=" * 100)
+
+        # Determine if we're in direct mode (inputs provided)
+        direct_mode = inputs is not None
+
+        # Propose generator prompt
         purpose_generator_prompt = read_text_file(self.PROPOSE_GENERATOR_PROMPT_PATH)
         # Replace max questions placeholder in the prompt
         if self.PROPOSE_GENERATOR_GENERATED_TYPE in ['content']:
-            purpose_generator_prompt = purpose_generator_prompt.replace('[[MAX_QUESTIONS]]', str(self.PROPOSE_GENERATOR_MAX_QUESTIONS_PER_CHUNK))
+            purpose_generator_prompt = purpose_generator_prompt.replace('[[MAX_QUESTIONS]]', str(self.MAX_QUESTION))
         elif self.PROPOSE_GENERATOR_GENERATED_TYPE in ['entity_graph']:
-            purpose_generator_prompt = purpose_generator_prompt.replace('[[MAX_QUESTIONS]]', str(self.PROPOSE_GENERATOR_MAX_QUESTIONS_PER_ENTITY))
-        info(f"Loaded propose generator prompt from {os.path.relpath(self.PROPOSE_GENERATOR_PROMPT_PATH, PROJECT_ROOT)}.")
+            purpose_generator_prompt = purpose_generator_prompt.replace('[[MAX_QUESTIONS]]', str(self.MAX_QUESTION))
+
+        if not direct_mode:
+            info(f"Loaded propose generator prompt from {os.path.relpath(self.PROPOSE_GENERATOR_PROMPT_PATH, PROJECT_ROOT)}.")
 
         if self.PROPOSE_GENERATOR_GENERATED_TYPE in ['content']:
+            # Load inputs if not provided
+            if inputs is None:
+                if os.path.exists(self.PROPOSE_GENERATOR_OUTPUT_PATH):
+                    inputs = load_json(self.PROPOSE_GENERATOR_OUTPUT_PATH)
+                    info(f"Loaded propose generator {len(inputs)} examples from {os.path.relpath(self.PROPOSE_GENERATOR_OUTPUT_PATH, PROJECT_ROOT)}.")
+                else:
+                    inputs = load_json(self.PROPOSE_GENERATOR_INPUT_PATH)
+                    info(f"Loaded propose generator {len(inputs)} examples from {os.path.relpath(self.PROPOSE_GENERATOR_INPUT_PATH, PROJECT_ROOT)}.")
+            else:
+                pass  # Direct mode - inputs provided
 
             success_num, all_num = 0, 0
             tasks = []
 
-            with ThreadPoolExecutor(max_workers=self.NUM_WORKERS) as executor:
-                for i, cur_input in enumerate(self.inputs[:self.PROPOSE_GENERATOR_MAX_GEN_TIMES]):
+            self.executor = ThreadPoolExecutor(max_workers=self.NUM_WORKERS)
+            try:
+                for i, cur_input in enumerate(inputs[:self.PROPOSE_GENERATOR_MAX_GEN_TIMES]):
                     if 'proposed-questions' in cur_input:
                         continue
                     # Reformat facts would look like: <detailed-desc>Many hostels have strict smoking policies that prohibit indoor smoking to maintain a safe and healthy environment.</detailed-desc>
                     context = reformat_objective_facts(cur_input)
                     cur_propose_generator_prompt = purpose_generator_prompt.replace('[[CONTEXT]]', context)
-                    future = executor.submit(self.process_input_content, cur_input, cur_propose_generator_prompt, i)
+                    future = self.executor.submit(self.process_input_content, cur_input, cur_propose_generator_prompt, i)
                     tasks.append(future)
 
                 all_num = len(tasks)
-                for future in tqdm(as_completed(tasks), total=len(tasks), desc="Generating", dynamic_ncols=True):
+                for future in tqdm(as_completed(tasks), total=len(tasks), desc="Generating Questions...", dynamic_ncols=True):
                     try:
-                        result, i = future.result(timeout=10*60)
+                        result, i, questions_count = future.result(timeout=10*60)
 
-                        self.inputs[i] = result
-                        
+                        inputs[i] = result
+
+                        # Track total questions generated with thread safety
+                        with self.token_lock:
+                            self.total_questions_generated += questions_count
+
                         success_num += 1
-                        if success_num % self.SAVE_INTERVAL == 0:
+                        if not direct_mode and success_num % self.SAVE_INTERVAL == 0:
                             info(f'Saving {success_num}/{all_num} outputs to {os.path.relpath(self.PROPOSE_GENERATOR_OUTPUT_PATH, PROJECT_ROOT)}.')
-                            save_json(self.inputs,self.PROPOSE_GENERATOR_OUTPUT_PATH)
+                            save_json(inputs, self.PROPOSE_GENERATOR_OUTPUT_PATH)
                     except Exception as e:
                         error(f"Error during processing: {e}")
+            except KeyboardInterrupt:
+                info("Task interrupted by user")
+            finally:
+                self.executor.shutdown(wait=False, cancel_futures=True)
+                self.executor = None
 
-            if success_num or not os.path.exists(self.PROPOSE_GENERATOR_OUTPUT_PATH):
-                info(f'Saving {success_num}/{all_num} outputs to {os.path.relpath(self.PROPOSE_GENERATOR_OUTPUT_PATH, PROJECT_ROOT)}.')
-                save_json(self.inputs,self.PROPOSE_GENERATOR_OUTPUT_PATH)
+            # Only save if not in direct mode
+            if not direct_mode:
+                if success_num or not os.path.exists(self.PROPOSE_GENERATOR_OUTPUT_PATH):
+                    info(f'Saving {success_num}/{all_num} outputs to {os.path.relpath(self.PROPOSE_GENERATOR_OUTPUT_PATH, PROJECT_ROOT)}.')
+                    save_json(inputs, self.PROPOSE_GENERATOR_OUTPUT_PATH)
 
             info(f"Total prompt tokens: {self.total_prompt_tokens}")
             info(f"Total completion tokens: {self.total_completion_tokens}")
+            info(f"Total questions generated: {self.total_questions_generated}")
             info(f"Success rate: {success_num}/{all_num} = {success_num/all_num*100:.2f}%" if all_num > 0 else "Success rate: N/A")
 
-            return self.total_prompt_tokens, self.total_completion_tokens, success_num, all_num
+            if direct_mode:
+                return inputs, self.total_prompt_tokens, self.total_completion_tokens, success_num, all_num, self.total_questions_generated
+            else:
+                return self.total_prompt_tokens, self.total_completion_tokens, success_num, all_num, self.total_questions_generated
 
         elif self.PROPOSE_GENERATOR_GENERATED_TYPE in ['entity_graph']:
+            # Load inputs if not provided
+            if inputs is None:
+                inputs = load_json(self.PROPOSE_GENERATOR_INPUT_PATH)
+                info(f"Loaded propose generator {len(inputs)} examples from {os.path.relpath(self.PROPOSE_GENERATOR_INPUT_PATH, PROJECT_ROOT)}.")
+            else:
+                pass  # Direct mode - inputs provided
+
+            # Build entity relationship graph
+            entity_relationship_graph = EntityRelationshipGraph(inputs)
+
+            # Save graph visualization if not in direct mode
+            if not direct_mode:
+                entities_dict = {}
+                for entity_id, entity_info in entity_relationship_graph.entities.items():
+                    entities_dict[entity_id] = {
+                        **entity_info,
+                        'chunk_names': list(entity_info['chunk_names']) if isinstance(entity_info['chunk_names'], set) else entity_info['chunk_names']
+                    }
+                save_json(entities_dict, self.PROPOSE_GENERATOR_GRAPH_PATH)
+                info(f"Saved entity relationship graph to {os.path.relpath(self.PROPOSE_GENERATOR_GRAPH_PATH, PROJECT_ROOT)}.")
+
             outputs = {}
-            if os.path.exists(self.PROPOSE_GENERATOR_OUTPUT_PATH):
+            if not direct_mode and os.path.exists(self.PROPOSE_GENERATOR_OUTPUT_PATH):
                 outputs = load_json(self.PROPOSE_GENERATOR_OUTPUT_PATH)
                 info(f"Loaded {len(outputs)} outputs from {os.path.relpath(self.PROPOSE_GENERATOR_OUTPUT_PATH, PROJECT_ROOT)}.")
 
@@ -200,28 +224,29 @@ class ProposeGenerator:
             all_num, success_num = 0, 0
             tasks = []
 
-            with ThreadPoolExecutor(max_workers=self.NUM_WORKERS) as executor:
-                for cur_entity_id, cur_entity_item in list(self.entity_relationship_graph.items())[:self.PROPOSE_GENERATOR_MAX_GEN_TIMES]:
+            self.executor = ThreadPoolExecutor(max_workers=self.NUM_WORKERS)
+            try:
+                for cur_entity_id, cur_entity_item in list(entity_relationship_graph.items())[:self.PROPOSE_GENERATOR_MAX_GEN_TIMES]:
                     if cur_entity_id in already_done_entity_ids:
                         continue
                     public_entity_name = cur_entity_item['entity_name']
 
-                    subgraph_depth_1 = self.entity_relationship_graph.get_subgraph(cur_entity_id, depth=1)
+                    subgraph_depth_1 = entity_relationship_graph.get_subgraph(cur_entity_id, depth=1)
                     subgraph_depth_1 = convert_set_to_list(subgraph_depth_1)
                     entity_relationship_prompt, \
                         cur_objective_relationship_prompts, \
                             cur_objective_relationships = self._entity_relationship_graph_2_entity_relationship_prompt(subgraph_depth_1)
-                    
+
                     if entity_relationship_prompt == "" or len(cur_objective_relationship_prompts) <= 1:
                         continue
-                    
+
                     cur_propose_generator_prompt = purpose_generator_prompt.replace('[[ENTITY_NAME]]', public_entity_name)
                     cur_propose_generator_prompt = cur_propose_generator_prompt.replace('[[CONTEXT]]', entity_relationship_prompt)
-                    future = executor.submit(call_api_qwen, cur_propose_generator_prompt, temperature=self.TEMPERATURE, system_prompt=self.SYSTEM_PROMPT)
+                    future = self.executor.submit(call_api_qwen, cur_propose_generator_prompt, temperature=self.TEMPERATURE, system_prompt=self.PROPOSE_GENERATOR_SYSTEM_PROMPT)
                     tasks.append((future, cur_entity_id, subgraph_depth_1, cur_objective_relationships, cur_objective_relationship_prompts))
 
                 all_num = len(tasks)
-                for future in tqdm(as_completed([t[0] for t in tasks]), total=len(tasks), desc="Generating", dynamic_ncols=True):
+                for future in tqdm(as_completed([t[0] for t in tasks]), total=len(tasks), desc="Generating Questions...", dynamic_ncols=True):
                     idx = [t[0] for t in tasks].index(future)
                     if idx == -1:
                         raise ValueError("Invalid index.")
@@ -257,21 +282,36 @@ class ProposeGenerator:
                             'proposed-questions': proposed_questions
                         })
 
+                        # Track total questions generated with thread safety
+                        with self.token_lock:
+                            self.total_questions_generated += len(proposed_questions)
+
                         success_num += 1
-                        if success_num % self.SAVE_INTERVAL == 0:
+                        if not direct_mode and success_num % self.SAVE_INTERVAL == 0:
                             save_json(outputs, self.PROPOSE_GENERATOR_OUTPUT_PATH)
                     except Exception as e:
                         error(f"Error processing entity {cur_entity_id}: {e}")
+            except KeyboardInterrupt:
+                info("Task interrupted by user")
+            finally:
+                self.executor.shutdown(wait=False, cancel_futures=True)
+                self.executor = None
 
-            if success_num or not os.path.exists(self.PROPOSE_GENERATOR_OUTPUT_PATH):
-                info(f'Saving {success_num}/{all_num} outputs to {os.path.relpath(self.PROPOSE_GENERATOR_OUTPUT_PATH, PROJECT_ROOT)}.')
-                save_json(outputs, self.PROPOSE_GENERATOR_OUTPUT_PATH)
+            # Only save if not in direct mode
+            if not direct_mode:
+                if success_num or not os.path.exists(self.PROPOSE_GENERATOR_OUTPUT_PATH):
+                    info(f'Saving {success_num}/{all_num} outputs to {os.path.relpath(self.PROPOSE_GENERATOR_OUTPUT_PATH, PROJECT_ROOT)}.')
+                    save_json(outputs, self.PROPOSE_GENERATOR_OUTPUT_PATH)
 
             info(f"Total prompt tokens: {self.total_prompt_tokens}")
             info(f"Total completion tokens: {self.total_completion_tokens}")
+            info(f"Total questions generated: {self.total_questions_generated}")
             info(f"Success rate: {success_num}/{all_num} = {success_num/all_num*100:.2f}%" if all_num > 0 else "Success rate: N/A")
 
-            return self.total_prompt_tokens, self.total_completion_tokens, success_num, all_num
+            if direct_mode:
+                return outputs, self.total_prompt_tokens, self.total_completion_tokens, success_num, all_num, self.total_questions_generated
+            else:
+                return self.total_prompt_tokens, self.total_completion_tokens, success_num, all_num, self.total_questions_generated
 
 def extract_execution_output_content(text):
     """

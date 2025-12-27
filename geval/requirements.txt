@@ -1,4 +1,0 @@
-deepeval
-datasets
-huggingface
-pandas

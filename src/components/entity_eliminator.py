@@ -4,7 +4,6 @@ import json
 import copy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
-
 from tqdm import tqdm
 import numpy as np
 from sklearn.cluster import DBSCAN
@@ -16,30 +15,25 @@ from src.utils.api_utils import call_api_qwen, get_qwen_embeddings
 from src.utils.logger import info, error, warning
 
 class EntityEliminator:
-
-    info("=" * 100)
-    info("Running Entity Eliminator".center(100))
-    info("=" * 100)
-
     def __init__(self):
-        self.ENTITY_ELIMINATOR_INPUT_PATH, self.ENTITY_ELIMINATOR_OUTPUT_PATH, self.ENTITY_ELIMINATOR_OUTPUT_MAP_PATH = None, None, None
+        self.ENTITY_ELIMINATOR_INPUT_PATH = None
+        self.ENTITY_ELIMINATOR_OUTPUT_PATH = None
+        self.ENTITY_ELIMINATOR_OUTPUT_MAP_PATH = None
+        self.ENTITY_ELIMINATOR_SIMILARITY_THRESHOLD = None
+        self.NUM_WORKERS = None
+        self.TEMPERATURE = None
         
-        if os.getenv("ENTITY_ELIMINATOR_INPUT_PATH") != None:
-            self.ENTITY_ELIMINATOR_INPUT_PATH = os.getenv("ENTITY_ELIMINATOR_INPUT_PATH")
-            self.ENTITY_ELIMINATOR_OUTPUT_PATH = os.getenv("ENTITY_ELIMINATOR_OUTPUT_PATH")
-            self.ENTITY_ELIMINATOR_OUTPUT_MAP_PATH = os.getenv("ENTITY_ELIMINATOR_OUTPUT_MAP_PATH")
-            self.ENTITY_ELIMINATOR_SIMILARITY_THRESHOLD = os.getenv("ENTITY_ELIMINATOR_SIMILARITY_THRESHOLD")
+        if os.getenv("ENTITY_ELIMINATOR_INPUT_PATH") is not None:
+            self.ENTITY_ELIMINATOR_INPUT_PATH = os.path.join(PROJECT_ROOT, os.getenv("ENTITY_ELIMINATOR_INPUT_PATH"))
+            self.ENTITY_ELIMINATOR_OUTPUT_PATH = os.path.join(PROJECT_ROOT, os.getenv("ENTITY_ELIMINATOR_OUTPUT_PATH"))
+            self.ENTITY_ELIMINATOR_OUTPUT_MAP_PATH = os.path.join(PROJECT_ROOT, os.getenv("ENTITY_ELIMINATOR_OUTPUT_MAP_PATH"))
+            
         else:
             raise EnvironmentError("Environment variable 'ENTITY_ELIMINATOR_INPUT_PATH' is not set.")
-
-        # Mandatory parameters to be defined in .env file
-        self.ENTITY_ELIMINATOR_INPUT_PATH = os.path.join(PROJECT_ROOT, self.ENTITY_ELIMINATOR_INPUT_PATH)
-        self.ENTITY_ELIMINATOR_OUTPUT_PATH = os.path.join(PROJECT_ROOT, self.ENTITY_ELIMINATOR_OUTPUT_PATH)
-        self.ENTITY_ELIMINATOR_OUTPUT_MAP_PATH = os.path.join(PROJECT_ROOT, self.ENTITY_ELIMINATOR_OUTPUT_MAP_PATH)
-        self.ENTITY_ELIMINATOR_SIMILARITY_THRESHOLD = float(self.ENTITY_ELIMINATOR_SIMILARITY_THRESHOLD)
-        # Optional parameters with default values
+        
         self.NUM_WORKERS = int(os.getenv("NUM_WORKERS", 4))
         self.TEMPERATURE = float(os.getenv("TEMPERATURE", 0.6))
+        self.ENTITY_ELIMINATOR_SIMILARITY_THRESHOLD = float(os.getenv("ENTITY_ELIMINATOR_SIMILARITY_THRESHOLD",0.8))
 
         # Token tracking
         self.total_prompt_tokens = 0
@@ -313,7 +307,7 @@ class EntityEliminator:
                     })
 
             # Collect results from the futures
-            for future in tqdm(as_completed(future_to_entity_group), total=len(future_to_entity_group), desc="Resolving entity groups", dynamic_ncols=True):
+            for future in tqdm(as_completed(future_to_entity_group), total=len(future_to_entity_group), desc="Resolving entity groups...", dynamic_ncols=True):
                 entity_name = future_to_entity_group[future]
                 try:
                     tmp_resolved_entities, tmp_entityid2entityid = future.result(timeout=10*60)
@@ -576,7 +570,7 @@ class EntityEliminator:
                     })
 
             # Collect results from futures
-            for future in tqdm(as_completed(future_to_cluster), total=len(future_to_cluster), desc="Resolving clusters", dynamic_ncols=True):
+            for future in tqdm(as_completed(future_to_cluster), total=len(future_to_cluster), desc="Resolving clusters...", dynamic_ncols=True):
                 try:
                     tmp_resolved_entities, tmp_entityid2entityid = future.result(timeout=10*60)
                     resolved_entities.extend(tmp_resolved_entities)
@@ -589,6 +583,10 @@ class EntityEliminator:
         return resolved_entities, entityid2entityid
 
     def run(self, inputs=None):
+        
+        info("=" * 100)
+        info("Running Entity Eliminator".center(100))
+        info("=" * 100)
 
         direct_mode = inputs is not None
 
@@ -603,8 +601,6 @@ class EntityEliminator:
             with open(self.ENTITY_ELIMINATOR_INPUT_PATH, "r", encoding="utf-8") as f:
                 inputs = json.load(f)
             info(f"Loaded {len(inputs)} examples from {os.path.relpath(self.ENTITY_ELIMINATOR_INPUT_PATH, PROJECT_ROOT)}.")
-        else:
-            info(f"Using provided inputs ({len(inputs)} items)")
 
         # Extract all entities from the input data
         all_entities = []
@@ -655,8 +651,26 @@ class EntityEliminator:
         for entity in all_entities:
             entityid2entity[int(entity["entity_id"])] = entity
 
+        # Track original and merged entity counts
+        original_entity_count = len(all_entities)
+
+        # Get all unique entity IDs after merging
+        # For entities in the mapping, use their mapped value; for others, use their original ID
+        all_entity_ids_set = set(entity["entity_id"] for entity in all_entities)
+        final_entity_ids = set()
+        for entity_id in all_entity_ids_set:
+            if entity_id in entityid2entityid:
+                final_entity_ids.add(entityid2entityid[entity_id])
+            else:
+                final_entity_ids.add(entity_id)
+
+        unique_entity_count = len(final_entity_ids)
+
+        info(f"Original entities: {original_entity_count}")
+        info(f"After merging: {unique_entity_count}")
+        info(f"Merged: {original_entity_count - unique_entity_count} entities")
+
         # Update the entity ids in the input data
-        merge_num = 0
         for cur_input in inputs:
             # Filter entities
             filtered_entities = []
@@ -670,7 +684,6 @@ class EntityEliminator:
 
             for cur_entity in filtered_entities:
                 if cur_entity["entity_id"] in entityid2entityid:
-                    merge_num += 1
                     origin_entityid = cur_entity["entity_id"]
                     new_entityid = entityid2entityid[origin_entityid]
                     cur_entity["entity_id"] = new_entityid
@@ -701,11 +714,11 @@ class EntityEliminator:
         if not direct_mode:
             with open(self.ENTITY_ELIMINATOR_OUTPUT_PATH, "w", encoding="utf-8") as f:
                 json.dump(inputs, f, indent=2, ensure_ascii=False)
-            info(f"Entity mapping saved to {os.path.relpath(self.ENTITY_ELIMINATOR_OUTPUT_MAP_PATH, PROJECT_ROOT)}, {merge_num} entities merged.")
+            info(f"Entity mapping saved to {os.path.relpath(self.ENTITY_ELIMINATOR_OUTPUT_MAP_PATH, PROJECT_ROOT)}, {original_entity_count - unique_entity_count} entities merged.")
             with open(self.ENTITY_ELIMINATOR_OUTPUT_MAP_PATH, "w", encoding="utf-8") as f:
                 json.dump(entityid2entityid, f, indent=2, ensure_ascii=False)
         else:
-            info(f"{merge_num} entities merged (direct mode - not saved to file)")
+            info(f"{original_entity_count - unique_entity_count} entities merged (direct mode - not saved to file)")
 
         """
         The final input will include entities, each with an entity_id, entity_name, and entity_description, which are the results of entity resolution.
@@ -718,9 +731,9 @@ class EntityEliminator:
 
         if direct_mode:
             # In direct mode, return the processed inputs along with mapping and stats
-            return inputs, entityid2entityid, self.total_prompt_tokens, self.total_completion_tokens, merge_num
+            return inputs, entityid2entityid, self.total_prompt_tokens, self.total_completion_tokens, original_entity_count, unique_entity_count
         else:
-            return inputs, self.total_prompt_tokens, self.total_completion_tokens, merge_num
+            return inputs, self.total_prompt_tokens, self.total_completion_tokens, original_entity_count, unique_entity_count
     
 
 if __name__ == '__main__':

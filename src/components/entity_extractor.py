@@ -2,6 +2,7 @@ import os
 import re
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 from tqdm import tqdm
 
@@ -12,30 +13,32 @@ from src import PROJECT_ROOT
 
 class EntityExtractor:
     def __init__(self):
-        
-        info("=" * 100)
-        info("Running Entity Extractor".center(100))
-        info("=" * 100)
 
         self.ENTITY_EXTRACTOR_PROMPT_PATH = None
         self.ENTITY_EXTRACTOR_INPUT_PATH = None
-        self.ENTITY_EXTRACTOR_OUTPUT_PATH = None        
+        self.ENTITY_EXTRACTOR_OUTPUT_PATH = None
+        self.TEMPERATURE = None
+        self.NUM_WORKERS = None
+        self.SAVE_INTERVAL = None
 
         if os.getenv("ENTITY_EXTRACTOR_PROMPT_PATH", None) != None:
-            self.ENTITY_EXTRACTOR_PROMPT_PATH = os.getenv("ENTITY_EXTRACTOR_PROMPT_PATH")
-            self.ENTITY_EXTRACTOR_INPUT_PATH = os.getenv("ENTITY_EXTRACTOR_INPUT_PATH")
-            self.ENTITY_EXTRACTOR_OUTPUT_PATH = os.getenv("ENTITY_EXTRACTOR_OUTPUT_PATH")
+            self.ENTITY_EXTRACTOR_PROMPT_PATH = os.path.join(PROJECT_ROOT, os.getenv("ENTITY_EXTRACTOR_PROMPT_PATH"))
+            self.ENTITY_EXTRACTOR_INPUT_PATH = os.path.join(PROJECT_ROOT, os.getenv("ENTITY_EXTRACTOR_INPUT_PATH"))
+            self.ENTITY_EXTRACTOR_OUTPUT_PATH = os.path.join(PROJECT_ROOT, os.getenv("ENTITY_EXTRACTOR_OUTPUT_PATH"))
         else:
             raise EnvironmentError("Environment variables are not defined correctly")
 
-        # mandatory parameters to be defined in .env file
-        self.ENTITY_EXTRACTOR_PROMPT_PATH = os.path.join(PROJECT_ROOT, self.ENTITY_EXTRACTOR_PROMPT_PATH)
-        self.ENTITY_EXTRACTOR_INPUT_PATH = os.path.join(PROJECT_ROOT, self.ENTITY_EXTRACTOR_INPUT_PATH)
-        self.ENTITY_EXTRACTOR_OUTPUT_PATH = os.path.join(PROJECT_ROOT, self.ENTITY_EXTRACTOR_OUTPUT_PATH)
         # optional parameter with default values
         self.TEMPERATURE = float(os.getenv("TEMPERATURE", "0.6"))
         self.NUM_WORKERS = int(os.getenv("NUM_WORKERS", "4"))
         self.SAVE_INTERVAL = int(os.getenv("SAVE_INTERVAL", "10"))
+
+        # Thread-safe counters
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
+        self.total_entities = 0
+        self.total_relationships = 0
+        self.token_lock = threading.Lock()
 
     def process_input(self, cur_input, entity_extractor_prompt, i):
         """Process a single input to extract entities and relationships"""
@@ -43,6 +46,12 @@ class EntityExtractor:
             context = cur_input['context']
             cur_entity_extractor_prompt = entity_extractor_prompt.replace('[[CONTEXT]]', context)
             entity_extractor_response, prompt_tokens, completion_tokens = call_api_qwen(cur_entity_extractor_prompt,temperature=self.TEMPERATURE)
+
+            # Thread-safe token accumulation
+            with self.token_lock:
+                self.total_prompt_tokens += prompt_tokens
+                self.total_completion_tokens += completion_tokens
+
             extract_entity = extract_entity_from_output(entity_extractor_response) # Parser function: Extract entities and relationships from model output with regex
             entities, relationships, is_complete = (
                 extract_entity['entities'],
@@ -68,46 +77,49 @@ class EntityExtractor:
                 if source_entity_name in entity_names and target_entity_name in entity_names:
                     filtered_relationships.append(relationship)
 
+            # Thread-safe counts accumulation
+            num_entities = len(filtered_entities)
+            num_relationships = len(filtered_relationships)
+            with self.token_lock:
+                self.total_entities += num_entities
+                self.total_relationships += num_relationships
+
             result = {
                 **cur_input,
                 'entity': filtered_entities,
                 'relationship': filtered_relationships
             }
-            return result, i, prompt_tokens, completion_tokens
+            return result, i
         except Exception as e:
             error(f"Error processing input {cur_input.get('id', 'unknown id')}: {e}")
-            return None, None, 0, 0
+            return None, None
 
-    def run(self,inputs=None, prompt=None):
+    def run(self, inputs=None):
+        
+        info("=" * 100)
+        info("Running Entity Extractor".center(100))
+        info("=" * 100)
+
         """Main entity extraction pipeline"""
-        # Determine if we're in direct mode (inputs and prompt provided)
+        # Determine if we're in direct mode (inputs provided)
         direct_mode = inputs is not None
 
-        # Load inputs if not provided
-        if inputs is None:
+        if inputs is None: # Indirect Mode, output to a json file
+            # determine if the entity extractor has been run
             if os.path.exists(self.ENTITY_EXTRACTOR_OUTPUT_PATH):
                 inputs = load_json(self.ENTITY_EXTRACTOR_OUTPUT_PATH)
                 info(f"Resuming from existing output: {len(inputs)} entries loaded")
             else:
                 inputs = load_json(self.ENTITY_EXTRACTOR_INPUT_PATH)
                 info(f"Loaded {len(inputs)} inputs from {self.ENTITY_EXTRACTOR_INPUT_PATH}")
-        else:
-            info(f"Using provided inputs ({len(inputs)} items)")
 
-        # Load prompt if not provided
-        if prompt is None:
-            entity_extractor_prompt = read_text_file(self.ENTITY_EXTRACTOR_PROMPT_PATH)
-            info(f"Loaded entity extractor prompt from {os.path.relpath(self.ENTITY_EXTRACTOR_PROMPT_PATH, PROJECT_ROOT)}.")
-        else:
-            entity_extractor_prompt = prompt
-            info("Using provided prompt")
+        else: # direct Mode, return a json object
+            pass  # Direct mode - inputs provided
+
+        entity_extractor_prompt = read_text_file(self.ENTITY_EXTRACTOR_PROMPT_PATH)
+        info(f"Loaded entity extractor prompt from {os.path.relpath(self.ENTITY_EXTRACTOR_PROMPT_PATH, PROJECT_ROOT)}.")
 
         all_num, success_num = 0, 0
-        total_prompt_tokens = 0
-        total_completion_tokens = 0
-
-        # Multiple workers extracting entities concurrently
-        info(f"Extracting entities with {self.NUM_WORKERS} workers......")
 
         with ThreadPoolExecutor(max_workers=self.NUM_WORKERS) as executor:
             futures = []
@@ -120,12 +132,10 @@ class EntityExtractor:
             iterator = tqdm(as_completed(futures), total=len(futures), dynamic_ncols=True, desc="Extracting entities")
 
             for future in iterator:
-                result, i, prompt_tokens, completion_tokens = future.result(timeout=10*60)
+                result, i = future.result(timeout=10*60)
                 if result != None:
                     inputs[i] = result
                     success_num += 1
-                    total_prompt_tokens += prompt_tokens
-                    total_completion_tokens += completion_tokens
 
                     # Save intermediate results only if not in direct mode
                     if not direct_mode and success_num % self.SAVE_INTERVAL == 0:
@@ -138,18 +148,27 @@ class EntityExtractor:
                 info(f'Saving {success_num}/{all_num} outputs to {os.path.relpath(self.ENTITY_EXTRACTOR_OUTPUT_PATH, PROJECT_ROOT)}.')
                 save_json(inputs, self.ENTITY_EXTRACTOR_OUTPUT_PATH)
 
-        info(f"Total prompt tokens: {total_prompt_tokens}")
-        info(f"Total completion tokens: {total_completion_tokens}")
+        info(f"Total prompt tokens: {self.total_prompt_tokens}")
+        info(f"Total completion tokens: {self.total_completion_tokens}")
+        info(f"Total entities extracted: {self.total_entities}")
+        info(f"Total relationships extracted: {self.total_relationships}")
+        info(f"Total facts extracted: {self.total_entities + self.total_relationships}")
+        if success_num > 0:
+            info(f"Average entities per input: {self.total_entities/success_num:.2f}")
+            info(f"Average relationships per input: {self.total_relationships/success_num:.2f}")
+            info(f"Average facts per input: {(self.total_entities + self.total_relationships)/success_num:.2f}")
         info(f"Task Success rate: {success_num}/{all_num} = {success_num/all_num*100:.2f}%" if all_num > 0 else "Task Success rate: N/A")
+
+        success_rate = success_num/all_num
 
         if direct_mode:
             # In direct mode, return the processed inputs instead of just stats
-            return inputs, total_prompt_tokens, total_completion_tokens, success_num, all_num
+            return inputs, self.total_prompt_tokens, self.total_completion_tokens, success_rate, self.total_entities, self.total_relationships
         else:
-            return total_prompt_tokens, total_completion_tokens, success_num, all_num
+            return self.total_prompt_tokens, self.total_completion_tokens, success_rate, self.total_entities, self.total_relationships
 
 def extract_entity_from_output(input_text):
-    """Extract entities and relationships from model output"""
+    """Regex String processing function to extract entities and relationships from model output"""
     entity_pattern = r'\("entity"\{tuple_delimiter\}(.*?)\{tuple_delimiter\}(.*?)\)'
     relationship_pattern = r'\("relationship"\{tuple_delimiter\}(.*?)\{tuple_delimiter\}(.*?)\{tuple_delimiter\}(.*?)\{tuple_delimiter\}(.*?)\)'
 

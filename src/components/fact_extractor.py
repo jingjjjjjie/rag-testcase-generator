@@ -3,8 +3,6 @@ import os
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
-from dotenv import load_dotenv
-
 from src import PROJECT_ROOT
 from src.utils.api_utils import call_api_qwen
 from src.utils.file_utils import load_json,save_json,read_text_file
@@ -12,27 +10,20 @@ from src.utils.logger import info, error
 
 class FactExtractor:
     def __init__(self):
-        
-        info("=" * 100)
-        info("Running Fact Extractor".center(100))
-        info("=" * 100)
-        
         self.FACT_EXTRACTOR_INPUT_PATH = None
         self.FACT_EXTRACTOR_PROMPT_PATH = None
         self.FACT_EXTRACTOR_OUTPUT_PATH = None
-
-        if os.getenv("FACT_EXTRACTOR_INPUT_PATH", None) != None:
-            self.FACT_EXTRACTOR_INPUT_PATH = os.getenv("FACT_EXTRACTOR_INPUT_PATH")
-            self.FACT_EXTRACTOR_PROMPT_PATH = os.getenv("FACT_EXTRACTOR_PROMPT_PATH")
-            self.FACT_EXTRACTOR_OUTPUT_PATH = os.getenv("FACT_EXTRACTOR_OUTPUT_PATH")
+        self.NUM_WORKERS = None
+        self.TEMPERATURE = None
+        self.SAVE_INTERVAL = None
+        
+        if os.getenv("FACT_EXTRACTOR_INPUT_PATH", None) is not None:
+            self.FACT_EXTRACTOR_INPUT_PATH = os.path.join(PROJECT_ROOT, os.getenv("FACT_EXTRACTOR_INPUT_PATH"))
+            self.FACT_EXTRACTOR_PROMPT_PATH = os.path.join(PROJECT_ROOT, os.getenv("FACT_EXTRACTOR_PROMPT_PATH"))
+            self.FACT_EXTRACTOR_OUTPUT_PATH = os.path.join(PROJECT_ROOT, os.getenv("FACT_EXTRACTOR_OUTPUT_PATH"))
         else:
             raise EnvironmentError("Environment variables are not configured properly.")
         
-        # mandatory parameters to be defined in .env file
-        self.FACT_EXTRACTOR_INPUT_PATH = os.path.join(PROJECT_ROOT, self.FACT_EXTRACTOR_INPUT_PATH)
-        self.FACT_EXTRACTOR_PROMPT_PATH = os.path.join(PROJECT_ROOT, self.FACT_EXTRACTOR_PROMPT_PATH)
-        self.FACT_EXTRACTOR_OUTPUT_PATH = os.path.join(PROJECT_ROOT, self.FACT_EXTRACTOR_OUTPUT_PATH)
-        # optional parameters with default values
         self.NUM_WORKERS = int(os.getenv("NUM_WORKERS", 4))
         self.TEMPERATURE = float(os.getenv("TEMPERATURE", 0.6))
         self.SAVE_INTERVAL = int(os.getenv("SAVE_INTERVAL", 10))
@@ -40,6 +31,7 @@ class FactExtractor:
         # Thread-safe token counters
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
+        self.total_facts_extracted = 0
         self.token_lock = threading.Lock()
     
     def process_input(self, cur_input, fact_extractor_prompt, i):
@@ -55,6 +47,11 @@ class FactExtractor:
                 self.total_completion_tokens += completion_tokens
 
             objective_facts, sens = extract_objective_facts(fact_extractor_response)
+
+            # Thread-safe facts count accumulation
+            with self.token_lock:
+                self.total_facts_extracted += len(objective_facts)
+
             result = {
                 **cur_input,
                 'objective-facts': objective_facts,
@@ -65,11 +62,14 @@ class FactExtractor:
             error(f"An error occurred while processing input {cur_input.get('id', 'unknown id')}: {e}")
             return None, None 
 
-    def run(self, inputs=None, prompt=None):
-        # Determine if we're in direct mode (inputs and prompt provided)
+    def run(self, inputs=None):
+        info("=" * 100)
+        info("Running Fact Extractor".center(100))
+        info("=" * 100)
+        # Determine if we're in direct mode (inputs provided)
         direct_mode = inputs is not None
 
-        # Load inputs if not provided 
+        # Load inputs if not provided
         if inputs is None:
             if os.path.exists(self.FACT_EXTRACTOR_OUTPUT_PATH):
                 inputs = load_json(self.FACT_EXTRACTOR_OUTPUT_PATH)
@@ -77,16 +77,10 @@ class FactExtractor:
             else:
                 inputs = load_json(self.FACT_EXTRACTOR_INPUT_PATH)
                 info(f"Loaded {len(inputs)} fact extractor examples from {os.path.relpath(self.FACT_EXTRACTOR_INPUT_PATH, PROJECT_ROOT)}.")
-        else:
-            info(f"Using provided inputs ({len(inputs)} items)")
 
-        # Load prompt if not provided
-        if prompt is None:
-            fact_extractor_prompt = read_text_file(self.FACT_EXTRACTOR_PROMPT_PATH)
+        fact_extractor_prompt = read_text_file(self.FACT_EXTRACTOR_PROMPT_PATH)
+        if not direct_mode:
             info(f"Loaded fact extractor prompt from {os.path.relpath(self.FACT_EXTRACTOR_PROMPT_PATH, PROJECT_ROOT)}.")
-        else:
-            fact_extractor_prompt = prompt
-            info("Using provided prompt")
 
         all_num, success_num = 0, 0
         with ThreadPoolExecutor(max_workers=self.NUM_WORKERS) as executor:
@@ -96,7 +90,7 @@ class FactExtractor:
                     futures.append(executor.submit(self.process_input, cur_input, fact_extractor_prompt, i))
 
             all_num = len(futures)
-            for future in tqdm(as_completed(futures), total=len(futures), dynamic_ncols=True):
+            for future in tqdm(as_completed(futures), total=len(futures), desc='Extracting Facts...', dynamic_ncols=True):
                 result, i = future.result(timeout=10*60)
                 if result != None:
                     inputs[i] = result
@@ -110,16 +104,18 @@ class FactExtractor:
             if success_num or not os.path.exists(self.FACT_EXTRACTOR_OUTPUT_PATH):
                 info(f'Saving {success_num}/{all_num} outputs to {os.path.relpath(self.FACT_EXTRACTOR_OUTPUT_PATH, PROJECT_ROOT)}.')
                 save_json(inputs, self.FACT_EXTRACTOR_OUTPUT_PATH)
-
+        
+        success_rate = f'{success_num/all_num*100:.2f}%' if all_num > 0 else "N/A"
         info(f"Total prompt tokens: {self.total_prompt_tokens}")
         info(f"Total completion tokens: {self.total_completion_tokens}")
-        info(f"Task Success rate: {success_num}/{all_num} = {success_num/all_num*100:.2f}%" if all_num > 0 else "Task Success rate: N/A")
+        info(f"Total facts extracted: {self.total_facts_extracted}")
+        info(f"Task Success rate: {success_num}/{all_num} = {success_rate}")
 
         if direct_mode:
             # In direct mode, return the processed inputs instead of stats
-            return inputs, self.total_prompt_tokens, self.total_completion_tokens, success_num, all_num
+            return inputs, self.total_prompt_tokens, self.total_completion_tokens, self.total_facts_extracted, success_rate
         else:
-            return self.total_prompt_tokens, self.total_completion_tokens, success_num, all_num
+            return self.total_prompt_tokens, self.total_completion_tokens, self.total_facts_extracted, success_rate
     
 def extract_objective_facts(text):
     """
@@ -172,6 +168,8 @@ def extract_objective_facts(text):
     return objective_facts, sen_numbers
 
 if __name__ == "__main__":
+    from dotenv import load_dotenv
     load_dotenv("single_hop.env")
+
     fact_extractor = FactExtractor()
     fact_extractor.run()

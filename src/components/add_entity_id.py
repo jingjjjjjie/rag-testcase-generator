@@ -21,14 +21,10 @@ class AddEntityId:
         self.ADD_ENTITY_ID_OUTPUT_PATH = None
 
         if os.getenv("ADD_ENTITY_ID_INPUT_PATH", None) != None:
-            self.ADD_ENTITY_ID_INPUT_PATH = os.getenv("ADD_ENTITY_ID_INPUT_PATH")
-            self.ADD_ENTITY_ID_OUTPUT_PATH = os.getenv("ADD_ENTITY_ID_OUTPUT_PATH")
+            self.ADD_ENTITY_ID_INPUT_PATH = os.path.join(PROJECT_ROOT, os.getenv("ADD_ENTITY_ID_INPUT_PATH"))
+            self.ADD_ENTITY_ID_OUTPUT_PATH = os.path.join(PROJECT_ROOT, os.getenv("ADD_ENTITY_ID_OUTPUT_PATH"))
         else:
             raise EnvironmentError("Environment variables are not defined correctly")
-        
-        # mandatory parameters to be defined in .env file
-        self.ADD_ENTITY_ID_INPUT_PATH = os.path.join(PROJECT_ROOT, self.ADD_ENTITY_ID_INPUT_PATH)
-        self.ADD_ENTITY_ID_OUTPUT_PATH = os.path.join(PROJECT_ROOT, self.ADD_ENTITY_ID_OUTPUT_PATH)
 
     def run(self, inputs=None):
         # Determine if we're in direct mode (inputs provided)
@@ -39,7 +35,6 @@ class AddEntityId:
             inputs = load_json(self.ADD_ENTITY_ID_INPUT_PATH)
             info(f"Loaded {len(inputs)} entries from {os.path.relpath(self.ADD_ENTITY_ID_INPUT_PATH, PROJECT_ROOT)}.")
         else:
-            info(f"Using provided inputs ({len(inputs)} items)")
             # Make a deep copy to avoid modifying the original input
             inputs = copy.deepcopy(inputs)
 
