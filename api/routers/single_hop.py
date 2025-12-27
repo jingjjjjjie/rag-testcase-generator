@@ -1,55 +1,41 @@
 """
 Single-hop pipeline endpoints.
 """
-import sys
-from pathlib import Path
 from fastapi import APIRouter
-from dotenv import load_dotenv
-
-# Add project root to path
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
-
-from src.components.preprocessor import Preprocessor
-from src.components.fact_extractor import FactExtractor
-from src.components.propose_generator import ProposeGenerator
-from src.components.final_answer_generator import FinalAnswerGenerator
-from src.components.answer_evaluator import AnswerEvaluator
-from src.utils.file_utils import load_json
-from api.models import SingleHopResponse
+from api.models import TaskSubmitResponse, TaskType
+from api.task_manager import task_manager
+from api.pipeline_runner import run_pipeline_with_tracking
+import threading
 
 router = APIRouter()
 
 
-@router.post("/run", response_model=SingleHopResponse)
+@router.post("/run", response_model=TaskSubmitResponse)
 async def run_single_hop():
-    """Run single-hop pipeline."""
-    load_dotenv('single_hop.env')
+    """
+    Submit a single-hop pipeline task to run in a separate thread.
+    Returns immediately with task_id.
 
-    # Stage 1: Preprocessor
-    preprocessor = Preprocessor()
-    preprocessor.run()
-    data = load_json(preprocessor.PREPROCESSOR_CHUNKED_OUTPUT_PATH)
+    The pipeline runs in its own thread, completely independent of FastAPI,
+    so GET /tasks/{task_id} will always return immediately with current state.
 
-    # Stage 2: FactExtractor
-    fact_extractor = FactExtractor()
-    data, _, _, total_facts, _, _ = fact_extractor.run(inputs=data)
+    Returns:
+        TaskSubmitResponse with task_id and status
+    """
+    # Create task with SINGLE_HOP type
+    task_id = task_manager.create_task(task_type=TaskType.SINGLE_HOP)
 
-    # Stage 3: ProposeGenerator
-    propose_generator = ProposeGenerator()
-    data, _, _, _, _ = propose_generator.run(inputs=data)
+    # Run in separate thread - this won't block FastAPI at all
+    thread = threading.Thread(
+        target=run_pipeline_with_tracking,
+        args=(task_id,),
+        daemon=True,
+        name=f"Pipeline-{task_id[:8]}"
+    )
+    thread.start()
 
-    # Stage 4: FinalAnswerGenerator
-    final_answer_generator = FinalAnswerGenerator()
-    data, _, _, _, _ = final_answer_generator.run(inputs=data)
-
-    # Stage 5: AnswerEvaluator
-    answer_evaluator = AnswerEvaluator()
-    data, _, _, _, _ = answer_evaluator.run(inputs=data)
-
-    return {
-        "status": "completed",
-        "total_chunks": len(data),
-        "total_facts": total_facts,
-        "results": data
-    }
+    return TaskSubmitResponse(
+        task_id=task_id,
+        status="submitted",
+        message=f"Task {task_id} submitted successfully. Use /api/v1/tasks/{task_id} to check status."
+    )
