@@ -54,20 +54,8 @@ class FinalAnswerGenerator:
         self.total_completion_tokens = 0
         self.token_lock = threading.Lock()
 
-        # Executor for signal handling
-        self.executor = None
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
-
         # Load prompt template (mandatory)
         self.prompt_template = read_text_file(self.FINAL_ANSWER_GENERATOR_PROMPT_PATH)
-
-    def _signal_handler(self, sig, frame):
-        """Handle Ctrl+C and termination signals"""
-        info("Received shutdown signal, cancelling tasks...")
-        if self.executor:
-            self.executor.shutdown(wait=False, cancel_futures=True)
-        raise KeyboardInterrupt()
 
     def process_input_content(self, cur_input, cur_prompt):
         try:
