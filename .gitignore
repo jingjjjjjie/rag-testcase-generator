@@ -4,6 +4,7 @@ logs/
 .deepeval/
 cache/
 outputs/
+output/
 outputs_multihop/
 tester*
 runs/
