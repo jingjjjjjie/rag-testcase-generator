@@ -1,0 +1,2 @@
+QWEN_API_KEY = . # api key from https://www.alibabacloud.com/help/en/model-studio/
+TEMPERATURE = 0.6
