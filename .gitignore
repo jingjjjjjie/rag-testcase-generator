@@ -6,6 +6,7 @@ cache/
 outputs/
 outputs_multihop/
 tester*
+runs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
