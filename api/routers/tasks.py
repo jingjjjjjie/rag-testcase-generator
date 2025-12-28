@@ -5,8 +5,10 @@ Provides endpoints for querying task status, retrieving results,
 and managing background pipeline tasks.
 """
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from api.models import TaskStatusResponse, TaskResultResponse, TaskStatus, TaskListResponse
 from api.task_manager import task_manager
+import os
 
 router = APIRouter()
 
@@ -193,3 +195,91 @@ async def delete_task(task_id: str):
             del task_manager.cancel_flags[task_id]
 
     return {"message": f"Task {task_id} deleted successfully"}
+
+
+@router.get("/{task_id}/download/full")
+async def download_full_output(task_id: str):
+    """
+    Download the full pipeline output JSON file.
+
+    Args:
+        task_id: UUID of the task
+
+    Returns:
+        FileResponse with the full_output.json file
+
+    Raises:
+        HTTPException: 404 if task not found or file doesn't exist
+    """
+    task = task_manager.get_task(task_id)
+
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+    if task["status"] != "completed":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Task is not completed yet. Current status: {task['status']}"
+        )
+
+    result = task_manager.get_result(task_id)
+
+    if not result or "full_output_path" not in result:
+        raise HTTPException(status_code=404, detail="Full output file path not found")
+
+    file_path = result["full_output_path"]
+
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+
+    filename = os.path.basename(file_path)
+
+    return FileResponse(
+        path=file_path,
+        media_type="application/json",
+        filename=filename
+    )
+
+
+@router.get("/{task_id}/download/questions")
+async def download_extracted_questions(task_id: str):
+    """
+    Download the extracted questions JSON file.
+
+    Args:
+        task_id: UUID of the task
+
+    Returns:
+        FileResponse with the extracted_questions.json file
+
+    Raises:
+        HTTPException: 404 if task not found or file doesn't exist
+    """
+    task = task_manager.get_task(task_id)
+
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+    if task["status"] != "completed":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Task is not completed yet. Current status: {task['status']}"
+        )
+
+    result = task_manager.get_result(task_id)
+
+    if not result or "extracted_output_path" not in result:
+        raise HTTPException(status_code=404, detail="Extracted questions file path not found")
+
+    file_path = result["extracted_output_path"]
+
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+
+    filename = os.path.basename(file_path)
+
+    return FileResponse(
+        path=file_path,
+        media_type="application/json",
+        filename=filename
+    )

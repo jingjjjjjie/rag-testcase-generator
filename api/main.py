@@ -9,8 +9,8 @@ app = FastAPI(
     title="RAG Testcase Generator",
     description="API for generating RAG testcases.",
     version="1.0.0",
-    docs_url=None,  # 禁用 Swagger UI（太慢）
-    redoc_url="/docs"  # 使用 ReDoc 作为主文档
+    docs_url="/docs",  # Swagger UI
+    redoc_url=None  # 禁用 ReDoc
 )
 
 # CORS middleware

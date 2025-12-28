@@ -4,6 +4,7 @@ Pipeline Runner with Progress Tracking.
 Executes the complete RAG testcase generation pipeline as a background task
 with real-time progress updates.
 """
+import os
 import traceback
 from datetime import datetime
 from dotenv import load_dotenv
@@ -103,6 +104,7 @@ def run_pipeline_with_tracking(task_id: str):
         total_completion_tokens += completion_tokens
         task_manager.update_tokens(task_id, prompt_tokens, completion_tokens)
 
+        # mark as complete
         update_stage_progress(task_id, "preprocessor", TaskStatus.COMPLETED, 1.0,
                             items_processed=len(data), items_total=len(data),
                             tokens=prompt_tokens + completion_tokens)
@@ -226,6 +228,34 @@ def run_pipeline_with_tracking(task_id: str):
         info(f"Task {task_id}: QuestionExtractor completed. Extracted {total_extracted_questions} valid questions.")
 
         # ========================================================================
+        # Save final outputs 
+        # ========================================================================
+
+        from src import PROJECT_ROOT
+        from src.utils.file_utils import save_json
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # Save full pipeline output
+        full_output_path = os.path.join(
+            PROJECT_ROOT,
+            "runs",
+            f"[{timestamp}]full_output.json"
+        )
+        os.makedirs(os.path.dirname(full_output_path), exist_ok=True)
+        save_json(data, full_output_path)
+        info(f"Full pipeline output saved to {full_output_path}")
+
+        # Save extracted questions
+        extracted_output_path = os.path.join(
+            PROJECT_ROOT,
+            "runs",
+            f"[{timestamp}]extracted_questions.json"
+        )
+        save_json(extracted_questions, extracted_output_path)
+        info(f"Extracted questions saved to {extracted_output_path}")
+
+        # ========================================================================
         # Store final results - tracking exactly what tester_single_hop.py tracks
         # ========================================================================
 
@@ -237,7 +267,9 @@ def run_pipeline_with_tracking(task_id: str):
             "total_questions_generated": total_questions_generated,  # Total Questions Generated
             "total_valid_questions_extracted": total_extracted_questions,  # Total Valid Questions Extracted
             "total_prompt_tokens": total_prompt_tokens,  # Total Prompt Tokens
-            "total_completion_tokens": total_completion_tokens  # Total Completion Tokens
+            "total_completion_tokens": total_completion_tokens,  # Total Completion Tokens
+            "full_output_path": full_output_path,  # Path to saved full output
+            "extracted_output_path": extracted_output_path  # Path to saved extracted questions
         }
 
         task_manager.store_result(task_id, result)
