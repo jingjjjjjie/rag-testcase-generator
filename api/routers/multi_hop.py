@@ -1,27 +1,41 @@
 """
 Multi-hop pipeline endpoints.
 """
-import sys
-from pathlib import Path
 from fastapi import APIRouter
-from dotenv import load_dotenv
-
-# Add project root to path
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
-
-from api.models import MultiHopResponse
+from api.models import TaskSubmitResponse, TaskType
+from api.task_manager import task_manager
+from api.pipeline_runner_multi_hop import run_multi_hop_pipeline_with_tracking
+import threading
 
 router = APIRouter()
 
 
-@router.post("/run", response_model=MultiHopResponse)
+@router.post("/run", response_model=TaskSubmitResponse)
 async def run_multi_hop():
-    """Run multi-hop pipeline."""
-    load_dotenv('multi_hop.env')
+    """
+    Submit a multi-hop pipeline task to run in a separate thread.
+    Returns immediately with task_id.
 
-    # TODO: Implement multi-hop pipeline
-    return {
-        "status": "not_implemented",
-        "message": "Multi-hop pipeline not yet implemented"
-    }
+    The pipeline runs in its own thread, completely independent of FastAPI,
+    so GET /tasks/{task_id} will always return immediately with current state.
+
+    Returns:
+        TaskSubmitResponse with task_id and status
+    """
+    # Create task with MULTI_HOP type
+    task_id = task_manager.create_task(task_type=TaskType.MULTI_HOP)
+
+    # Run in separate thread - this won't block FastAPI at all
+    thread = threading.Thread(
+        target=run_multi_hop_pipeline_with_tracking,
+        args=(task_id,),
+        daemon=True,
+        name=f"MultiHopPipeline-{task_id[:8]}"
+    )
+    thread.start()
+
+    return TaskSubmitResponse(
+        task_id=task_id,
+        status="submitted",
+        message=f"Multi-hop task {task_id} submitted successfully. Use /tasks/{task_id} to check status."
+    )

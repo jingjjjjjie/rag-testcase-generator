@@ -37,5 +37,5 @@ async def run_single_hop():
     return TaskSubmitResponse(
         task_id=task_id,
         status="submitted",
-        message=f"Task {task_id} submitted successfully. Use /api/v1/tasks/{task_id} to check status."
+        message=f"Task {task_id} submitted successfully. Use /tasks/{task_id} to check status."
     )

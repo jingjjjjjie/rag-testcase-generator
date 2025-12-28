@@ -23,10 +23,10 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(health.router, prefix="/api/v1", tags=["health"])
-app.include_router(single_hop.router, prefix="/api/v1/single-hop", tags=["single-hop"])
-app.include_router(multi_hop.router, prefix="/api/v1/multi-hop", tags=["multi-hop"])
-app.include_router(tasks.router, prefix="/api/v1/tasks", tags=["tasks"])
+app.include_router(health.router, tags=["health"])
+app.include_router(single_hop.router, prefix="/single-hop", tags=["single-hop"])
+app.include_router(multi_hop.router, prefix="/multi-hop", tags=["multi-hop"])
+app.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
 
 @app.get("/")
 async def root():

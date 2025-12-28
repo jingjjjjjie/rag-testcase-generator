@@ -56,7 +56,11 @@ async def get_task_status(task_id: str):
 
     # Calculate progress from stages
     if task["stages"]:
-        progress = sum(stage["progress"] for stage in task["stages"].values()) / 6.0
+        num_stages = len(task["stages"])
+        if num_stages > 0:
+            progress = sum(stage["progress"] for stage in task["stages"].values()) / num_stages
+        else:
+            progress = 0.0
     else:
         progress = 0.0
 
@@ -114,11 +118,15 @@ async def get_task_result(task_id: str):
     if not result:
         raise HTTPException(status_code=404, detail="Task result not found")
 
+    # Handle both single-hop and multi-hop results
+    # Single-hop has "total_facts", multi-hop has "total_entities"
+    total_facts = result.get("total_facts", result.get("total_entities", 0))
+
     return TaskResultResponse(
         task_id=task_id,
         status=task.status,
         total_chunks=result["total_chunks"],
-        total_facts=result["total_facts"],
+        total_facts=total_facts,
         total_questions_generated=result["total_questions_generated"],
         total_valid_questions_extracted=result["total_valid_questions_extracted"],
         total_prompt_tokens=result["total_prompt_tokens"],
