@@ -1,0 +1,56 @@
+# Ignore unnecessary files to reduce image size
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Test and development files
+*.md
+README*
+LICENSE
+.github/
+
+# Outputs and runs (will be generated in container)
+runs/
+src/outputs/
+src/outputs_multihop/
+
+# Test files
+tests/
+test_*.py
+*_test.py
+
+# Documentation
+docs/
+
+# Notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp

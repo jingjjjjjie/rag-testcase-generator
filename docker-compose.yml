@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  rag-api:
+    build: .
+    ports:
+      - "10500:10500"
+    volumes:
+      # Mount outputs to persist results
+      - ./runs:/app/runs
+      - ./src/files:/app/src/files
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
