@@ -3,7 +3,9 @@ FastAPI main application entry point.
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.routers import single_hop, multi_hop, health, tasks
+from fastapi.openapi.utils import get_openapi
+from api.routers import single_hop, multi_hop, health, tasks, config
+from api.config_manager import config_manager
 
 app = FastAPI(
     title="RAG Testcase Generator",
@@ -12,6 +14,35 @@ app = FastAPI(
     docs_url="/docs",  # Swagger UI
     redoc_url=None  # 禁用 ReDoc
 )
+
+
+def custom_openapi():
+    """Customize OpenAPI schema to show current config values in examples"""
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+
+    # Get current config values
+    current_config = config_manager.get_config()
+
+    # Update the PUT /config endpoint schema to show current values as example
+    if "/config/" in openapi_schema["paths"]:
+        put_endpoint = openapi_schema["paths"]["/config/"].get("put")
+        if put_endpoint and "requestBody" in put_endpoint:
+            # Set example values to current config
+            put_endpoint["requestBody"]["content"]["application/json"]["example"] = current_config.model_dump()
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
 
 # CORS middleware
 app.add_middleware(
@@ -24,6 +55,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(health.router, tags=["health"])
+app.include_router(config.router, prefix="/config", tags=["config"])
 app.include_router(single_hop.router, prefix="/single-hop", tags=["single-hop"])
 app.include_router(multi_hop.router, prefix="/multi-hop", tags=["multi-hop"])
 app.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
