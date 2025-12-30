@@ -54,7 +54,7 @@ def update_stage_progress(task_id: str, stage_name: str,
     task_manager.update_stage(task_id, stage_name, stage_info)
 
 
-def run_pipeline_with_tracking(task_id: str):
+def run_pipeline_with_tracking(task_id: str, pdf_path: str = None):
     """
     Run the complete single-hop pipeline with progress tracking.
     Updates task status at each stage.
@@ -72,6 +72,7 @@ def run_pipeline_with_tracking(task_id: str):
 
     Args:
         task_id: UUID of the task to execute
+        pdf_path: Optional path to PDF file. If not provided, uses environment variable path.
     """
     try:
         task_manager.update_task_status(task_id, TaskStatus.RUNNING)
@@ -91,8 +92,22 @@ def run_pipeline_with_tracking(task_id: str):
             return
 
         update_stage_progress(task_id, "preprocessor", TaskStatus.RUNNING, 0.0)
+
+        # If pdf_path provided, temporarily override environment variable
+        original_pdf_path = None
+        if pdf_path:
+            original_pdf_path = os.getenv("PREPROCESSOR_PDF_PATH")
+            # Convert absolute path to relative path from PROJECT_ROOT
+            from src import PROJECT_ROOT
+            relative_path = os.path.relpath(pdf_path, PROJECT_ROOT)
+            os.environ["PREPROCESSOR_PDF_PATH"] = relative_path
+
         preprocessor = Preprocessor()
         preprocessor_result = preprocessor.run()
+
+        # Restore original environment variable if it was overridden
+        if original_pdf_path is not None:
+            os.environ["PREPROCESSOR_PDF_PATH"] = original_pdf_path
 
         # Preprocessor doesn't support direct mode, must load from file
         from src.utils.file_utils import load_json

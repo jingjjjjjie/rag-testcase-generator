@@ -1,7 +1,8 @@
 version: '3.8'
 
 services:
-  rag-api:
+  api:
+    container_name: rag-testcase-generator-JJ
     build: .
     ports:
       - "10500:10500"

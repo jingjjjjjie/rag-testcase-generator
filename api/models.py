@@ -128,3 +128,15 @@ class TaskListResponse(BaseModel):
     """Response for listing all tasks"""
     total: int
     tasks: List[TaskListItem]
+
+
+class UploadPDFRequest(BaseModel):
+    """Request model for uploading PDF"""
+    filename: str
+
+
+class UploadPDFResponse(BaseModel):
+    """Response after PDF upload"""
+    message: str
+    filename: str
+    file_path: str
