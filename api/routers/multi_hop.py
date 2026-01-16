@@ -17,11 +17,7 @@ router = APIRouter()
 async def run_multi_hop(file: Optional[UploadFile] = File(None)):
     """
     Submit a multi-hop pipeline task to run in a separate thread.
-    Returns immediately with task_id.
-
-    The pipeline runs in its own thread, completely independent of FastAPI,
-    so GET /tasks/{task_id} will always return immediately with current state.
-
+    
     Args:
         file: Optional PDF file to upload and process. If not provided,
               uses the PDF path from environment variables.

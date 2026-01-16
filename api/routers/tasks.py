@@ -16,7 +16,7 @@ router = APIRouter()
 @router.get("/", response_model=TaskListResponse)
 async def list_tasks():
     """
-    Get a list of all tasks.
+    Get a list of all  running tasks.
 
     Returns:
         TaskListResponse with list of all tasks and their basic info
@@ -107,10 +107,10 @@ async def get_task_result(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
-    if task.status != TaskStatus.COMPLETED:
+    if task["status"] != "completed":
         raise HTTPException(
             status_code=400,
-            detail=f"Task is not completed yet. Current status: {task.status}"
+            detail=f"Task is not completed yet. Current status: {task['status']}"
         )
 
     result = task_manager.get_result(task_id)
@@ -124,7 +124,7 @@ async def get_task_result(task_id: str):
 
     return TaskResultResponse(
         task_id=task_id,
-        status=task.status,
+        status=task["status"],
         total_chunks=result["total_chunks"],
         total_facts=total_facts,
         total_questions_generated=result["total_questions_generated"],

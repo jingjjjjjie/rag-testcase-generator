@@ -188,12 +188,14 @@ class TaskManager:
             if task_id not in self.tasks:
                 return 0.0
 
-            stages = self.tasks[task_id].stages
-            if not stages:
+            task = self.tasks[task_id]
+            if not task.stages:
                 return 0.0
 
-            total_progress = sum(stage.progress for stage in stages.values())
-            return total_progress / 6.0  # 6 total stages in pipeline
+            # Single-hop has 6 stages, multi-hop has 8 stages
+            num_stages = 8 if task.task_type == TaskType.MULTI_HOP else 6
+            total_progress = sum(stage.progress for stage in task.stages.values())
+            return total_progress / num_stages
 
     def request_cancel(self, task_id: str):
         """
@@ -229,9 +231,10 @@ class TaskManager:
         with self.lock:
             tasks_list = []
             for task_id, task in self.tasks.items():
-                # Calculate progress
+                # Calculate progress - single-hop has 6 stages, multi-hop has 8
                 if task.stages:
-                    progress = sum(stage.progress for stage in task.stages.values()) / 6.0
+                    num_stages = 8 if task.task_type == TaskType.MULTI_HOP else 6
+                    progress = sum(stage.progress for stage in task.stages.values()) / num_stages
                 else:
                     progress = 0.0
 

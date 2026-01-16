@@ -16,12 +16,8 @@ router = APIRouter()
 @router.post("/run", response_model=TaskSubmitResponse)
 async def run_single_hop(file: Optional[UploadFile] = File(None)):
     """
-    Submit a single-hop pipeline task to run in a separate thread.
-    Returns immediately with task_id.
-
-    The pipeline runs in its own thread, completely independent of FastAPI,
-    so GET /tasks/{task_id} will always return immediately with current state.
-
+    Submit a single-hop pipeline task that runs in a separate thread.
+    
     Args:
         file: Optional PDF file to upload and process. If not provided,
               uses the PDF path from environment variables.
